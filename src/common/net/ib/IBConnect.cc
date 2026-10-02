@@ -587,15 +587,22 @@ int IBSocket::qpCreate() {
   attr.cap.max_recv_wr = connectConfig_.qpMaxRecvWR();
   attr.cap.max_send_sge = connectConfig_.max_sge;
   attr.cap.max_recv_sge = 1;
-  attr.cap.max_inline_data = 0;
+  attr.cap.max_inline_data = kBFMaxInlineSend;
   attr.qp_type = IBV_QPT_RC;
   attr.sq_sig_all = 0;
 
   qp_.reset(ibv_create_qp(device()->pd(), &attr));
   if (UNLIKELY(!qp_)) {
+    // the device may not support inline data, try again without it
+    attr.cap.max_inline_data = 0;
+    qp_.reset(ibv_create_qp(device()->pd(), &attr));
+  }
+  if (UNLIKELY(!qp_)) {
     XLOGF(ERR, "IBSocket {} failed to create QP, errno {}", describe(), errno);
     return -1;
   }
+  // ibv_create_qp() writes the granted inline data size back into attr.
+  maxInlineData_ = std::min(attr.cap.max_inline_data, kBFMaxInlineSend);
 
   return initBufs();
 }
