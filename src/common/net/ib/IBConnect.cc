@@ -593,6 +593,11 @@ int IBSocket::qpCreate() {
 
   qp_.reset(ibv_create_qp(device()->pd(), &attr));
   if (UNLIKELY(!qp_)) {
+    // some devices take less inline data (irdma: 101 bytes), try 64
+    attr.cap.max_inline_data = 64;
+    qp_.reset(ibv_create_qp(device()->pd(), &attr));
+  }
+  if (UNLIKELY(!qp_)) {
     // the device may not support inline data, try again without it
     attr.cap.max_inline_data = 0;
     qp_.reset(ibv_create_qp(device()->pd(), &attr));
@@ -602,7 +607,10 @@ int IBSocket::qpCreate() {
     return -1;
   }
   // ibv_create_qp() writes the granted inline data size back into attr.
-  maxInlineData_ = std::min(attr.cap.max_inline_data, kBFMaxInlineSend);
+  maxInlineData_ = attr.cap.max_inline_data;
+  if (device()->attr().vendor_id == kMellanoxVendorId) {
+    maxInlineData_ = std::min(maxInlineData_, kBFMaxInlineSend);
+  }
 
   return initBufs();
 }
