@@ -605,7 +605,10 @@ int IBSocket::qpCreate() {
   }
 
   const uint32_t vendorId = device()->attr().vendor_id;
-  uint32_t inlineSize = inlineDataToRequest(vendorId, kBFMaxInlineSend, false);
+  uint32_t inlineSize = device()->inlineDataRequest();
+  if (inlineSize == UINT32_MAX) {
+    inlineSize = inlineDataToRequest(vendorId, kBFMaxInlineSend, false);
+  }
   ibv_qp_init_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_context = nullptr;
@@ -621,8 +624,11 @@ int IBSocket::qpCreate() {
   attr.sq_sig_all = 0;
 
   qp_.reset(ibv_create_qp(device()->pd(), &attr));
-  while (UNLIKELY(!qp_) && inlineSize > 0) {
-    inlineSize = inlineDataToRequest(vendorId, inlineSize, true);
+  // A refused inline size fails with EINVAL; any other failure is reported below with its errno.
+  while (UNLIKELY(!qp_) && errno == EINVAL && inlineSize > 0) {
+    uint32_t next = inlineDataToRequest(vendorId, inlineSize, true);
+    XLOGF(DBG, "IBSocket {} ibv_create_qp refused {} bytes of inline data, trying {}", describe(), inlineSize, next);
+    inlineSize = next;
     attr.cap.max_inline_data = inlineSize;
     qp_.reset(ibv_create_qp(device()->pd(), &attr));
   }
@@ -630,6 +636,7 @@ int IBSocket::qpCreate() {
     XLOGF(ERR, "IBSocket {} failed to create QP, errno {}", describe(), errno);
     return -1;
   }
+  device()->setInlineDataRequest(inlineSize);
   // ibv_create_qp() writes the granted inline data size back into attr.
   maxInlineData_ = attr.cap.max_inline_data;
   if (vendorId == kMellanoxVendorId) {
